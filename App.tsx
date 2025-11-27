@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback, useReducer } from 'react';
-import { RefreshCw, Trophy, Crown, Zap, Volume2, VolumeX, RotateCw, Hammer, Repeat, Activity, Undo2, Pause, Play, Home, Grid3X3 } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useReducer, useLayoutEffect } from 'react';
+import { RefreshCw, Trophy, Crown, Zap, Volume2, VolumeX, RotateCw, Hammer, Repeat, Activity, Undo2, Pause, Play, Home, Grid3X3, Star } from 'lucide-react';
 import { GRID_SIZE, SCORING, POWERUP_REWARDS, SHAPES_DATA } from './constants';
-import { GameState, GameAction, Shape, Grid, DifficultyTier, DragState, HistoryState, FloatingText } from './types';
+import { GameState, GameAction, Shape, Grid, DifficultyTier, DragState, HistoryState, FloatingText, Particle } from './types';
 
 const SAVE_KEY = 'blockPuzzleSaveState';
 
@@ -157,8 +157,6 @@ const calculateScoreResult = (originalGrid: Grid, r: number, c: number, shapeMat
     } else if (count === 2) {
       comboText = "DOUBLE CLEAR! ✨";
       hammerBonus = POWERUP_REWARDS.DOUBLE_CLEAR;
-    } else if (count === 1) {
-      comboText = "NICE ONE! 👍";
     }
   }
 
@@ -177,9 +175,9 @@ let audioContext: AudioContext | null = null;
 
 const getAudioContext = () => {
   if (!audioContext && typeof window !== 'undefined') {
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioContext) {
-      audioContext = new AudioContext();
+    const AudioCtxConstructor = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtxConstructor) {
+      audioContext = new AudioCtxConstructor();
     }
   }
   return audioContext;
@@ -275,11 +273,130 @@ const FloatingTextOverlay = ({ effects }: { effects: FloatingText[] }) => {
             top: `${(effect.r * 100 / GRID_SIZE) + 5}%`,
             fontSize: 'min(5vw, 24px)',
             color: effect.text.includes('Combo') ? '#fbbf24' : '#ffffff',
+            zIndex: 40
           }}
         >
           {effect.text}
         </div>
       ))}
+    </div>
+  );
+};
+
+const ParticleOverlay = ({ placed, cleared }: { placed: {r: number, c: number}[], cleared: {r: number, c: number}[] }) => {
+  const [particles, setParticles] = useState<Particle[]>([]);
+  const requestRef = useRef<number | undefined>(undefined);
+  const previousTimeRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (placed.length === 0 && cleared.length === 0) return;
+
+    const newParticles: Particle[] = [];
+    
+    // Spawn dust for placement
+    placed.forEach(cell => {
+        for (let i = 0; i < 3; i++) {
+            newParticles.push({
+                id: Math.random(),
+                x: (cell.c * 100 / GRID_SIZE) + 5 + (Math.random() * 8 - 4),
+                y: (cell.r * 100 / GRID_SIZE) + 5 + (Math.random() * 8 - 4),
+                vx: (Math.random() - 0.5) * 0.5,
+                vy: (Math.random() - 0.5) * 0.5,
+                life: 1.0,
+                color: '#60a5fa', // blue-400
+                size: Math.random() * 3 + 2
+            });
+        }
+    });
+
+    // Spawn explosion for clears
+    cleared.forEach(cell => {
+        for (let i = 0; i < 8; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = Math.random() * 1.5;
+            newParticles.push({
+                id: Math.random(),
+                x: (cell.c * 100 / GRID_SIZE) + 5,
+                y: (cell.r * 100 / GRID_SIZE) + 5,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 1.0,
+                color: Math.random() > 0.5 ? '#ffffff' : '#fbbf24', // white or amber
+                size: Math.random() * 4 + 3
+            });
+        }
+    });
+
+    setParticles(prev => [...prev, ...newParticles]);
+  }, [placed, cleared]);
+
+  const animate = (time: number) => {
+    if (previousTimeRef.current !== undefined) {
+      setParticles(prevParticles => {
+        if (prevParticles.length === 0) return [];
+        return prevParticles
+          .map(p => ({
+            ...p,
+            x: p.x + p.vx,
+            y: p.y + p.vy,
+            vy: p.vy + 0.05, // gravity
+            life: p.life - 0.02,
+            size: p.size * 0.95
+          }))
+          .filter(p => p.life > 0);
+      });
+    }
+    previousTimeRef.current = time;
+    requestRef.current = requestAnimationFrame(animate);
+  };
+
+  useEffect(() => {
+    requestRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(requestRef.current!);
+  }, []);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden rounded-2xl">
+      {particles.map(p => (
+        <div
+            key={p.id}
+            style={{
+                position: 'absolute',
+                left: `${p.x}%`,
+                top: `${p.y}%`,
+                width: `${p.size}px`,
+                height: `${p.size}px`,
+                backgroundColor: p.color,
+                opacity: p.life,
+                borderRadius: '50%',
+                transform: 'translate(-50%, -50%)',
+                boxShadow: `0 0 ${p.size * 2}px ${p.color}`
+            }}
+        />
+      ))}
+    </div>
+  );
+};
+
+const DifficultyAnnouncement = ({ text }: { text: string | null }) => {
+  if (!text) return null;
+  
+  // Extract level name from string if possible, or just use the text
+  const levelName = text.replace('DIFFICULTY:', '').replace('!', '').trim();
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
+       <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm animate-[fade-in_0.5s_ease-out]" />
+       <div className="relative flex flex-col items-center justify-center animate-[difficulty-zoom_0.8s_cubic-bezier(0.22,1,0.36,1)_forwards]">
+         <div className="relative">
+             <div className="absolute inset-0 bg-gradient-to-r from-yellow-400 to-red-500 blur-xl opacity-50 rounded-full animate-pulse" />
+             <Crown className="w-24 h-24 text-yellow-400 relative z-10 drop-shadow-[0_0_20px_rgba(250,204,21,0.6)]" />
+         </div>
+         <h2 className="mt-6 text-2xl font-bold text-yellow-100 uppercase tracking-widest opacity-80">Difficulty Increased</h2>
+         <div className="text-6xl md:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-orange-400 to-red-500 animate-[shine_2s_linear_infinite] bg-[length:200%_auto] drop-shadow-lg mt-2">
+            {levelName}
+         </div>
+       </div>
     </div>
   );
 };
@@ -310,6 +427,7 @@ const initialState: GameState = {
   powerUps: { hammer: 1, refresh: 0 },
   activePowerUp: null, 
   comboText: null, 
+  difficultyModal: null,
   draggingShape: null, 
   ghostPosition: null, 
   previewClears: new Set(),
@@ -476,10 +594,10 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
             powerUps: { ...state.powerUps, hammer: state.powerUps.hammer - 1 },
             activePowerUp: null,
             scorePop: true,
-            comboText: 'HAMMER SMASH! 🔨',
+            comboText: null, 
             soundEffectToPlay: 'clear',
             clearedCells: clearedCoords,
-            effects: [...state.effects, { id: Date.now(), r, c, text: `+${points}` }]
+            effects: [...state.effects, { id: Date.now(), r, c, text: `+${points}` }, { id: Date.now()+1, r: Math.max(0, r-1), c, text: 'HAMMER SMASH!' }]
         };
     }
 
@@ -560,6 +678,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
       
       const newEffects = [...state.effects, { id: Date.now(), r, c, text: `+${Math.floor(points)}` }];
       if (comboText) {
+          // Use effects for combos instead of static center text
           newEffects.push({ id: Date.now() + 1, r: Math.max(0, r-1), c, text: comboText });
       }
 
@@ -576,7 +695,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         previewClears: new Set(),
         previewScore: 0,
         scorePop: true,
-        comboText: comboText,
+        comboText: null, 
         soundEffectToPlay: clearedCount > 0 ? 'clear' : 'drop',
         placedCells: newlyPlaced,
         clearedCells: newlyCleared,
@@ -644,16 +763,19 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
     case 'SHOW_DIFFICULTY_CHANGE':
       return {
         ...state,
-        comboText: action.payload,
+        difficultyModal: action.payload,
         soundEffectToPlay: 'clear'
       };
+
+    case 'CLOSE_DIFFICULTY_MODAL':
+      return { ...state, difficultyModal: null };
 
     case 'TOGGLE_PAUSE':
       return { 
         ...state, 
         isPaused: !state.isPaused, 
         draggingShape: null, 
-        ghostPosition: null,
+        ghostPosition: null, 
         activePowerUp: null 
       };
 
@@ -669,6 +791,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         activePowerUp: null,
         scorePop: false,
         comboText: null,
+        difficultyModal: null,
         soundEffectToPlay: null,
         previewClears: new Set(),
         effects: [],
@@ -703,6 +826,10 @@ const App = () => {
   
   const lastGhostPos = useRef<string | null>(null);
   const lastUndoRef = useRef(0);
+  
+  // Tray animation refs
+  const prevShapesRef = useRef<Shape[]>([]);
+  const trayRef = useRef<HTMLDivElement>(null);
 
   const currentDifficulty = DIFFICULTY_TIERS.slice().reverse().find(tier => state.score >= tier.score) || DIFFICULTY_TIERS[0];
   const prevDifficulty = useRef(currentDifficulty.level);
@@ -713,6 +840,46 @@ const App = () => {
     } catch { return false; }
   };
 
+  // FLIP Animation for Tray
+  useLayoutEffect(() => {
+    if (!trayRef.current) return;
+    
+    // 1. Snapshot previous positions
+    const prevPositions = new Map();
+    prevShapesRef.current.forEach(shape => {
+        const el = document.getElementById(`shape-${shape.uid}`);
+        if (el) prevPositions.set(shape.uid, el.getBoundingClientRect());
+    });
+    
+    // 2. Browser updates DOM with new state (happens automatically before this runs)
+    
+    // 3. Calculate changes and apply invert transform
+    state.availableShapes.forEach(shape => {
+        const el = document.getElementById(`shape-${shape.uid}`);
+        const prevRect = prevPositions.get(shape.uid);
+        
+        if (el && prevRect) {
+            const currentRect = el.getBoundingClientRect();
+            const deltaX = prevRect.left - currentRect.left;
+            const deltaY = prevRect.top - currentRect.top;
+            
+            if (deltaX !== 0 || deltaY !== 0) {
+                el.style.transition = 'none';
+                el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+                
+                // 4. Play animation
+                requestAnimationFrame(() => {
+                    el.style.transition = 'transform 300ms cubic-bezier(0.2, 0, 0.2, 1)';
+                    el.style.transform = '';
+                });
+            }
+        }
+    });
+    
+    prevShapesRef.current = state.availableShapes;
+  }, [state.availableShapes]);
+
+
   // Auto-save effect
   useEffect(() => {
     if (view !== 'game') return;
@@ -721,16 +888,17 @@ const App = () => {
         if (!state.gameOver) {
             const saveData = {
               ...state,
-              history: state.history, // Persist history
+              history: state.history, 
               isPaused: false, 
               draggingShape: null,
               ghostPosition: null,
-              previewClears: [], // Clear non-serializable Set
+              previewClears: [], 
               effects: [],
               placedCells: [],
               clearedCells: [],
               scorePop: false,
               comboText: null,
+              difficultyModal: null,
               soundEffectToPlay: null
             };
             try {
@@ -741,7 +909,7 @@ const App = () => {
         }
     };
 
-    const timer = setTimeout(saveState, 500); // 500ms debounce
+    const timer = setTimeout(saveState, 500); 
     return () => clearTimeout(timer);
   }, [state, view]);
   
@@ -764,6 +932,7 @@ const App = () => {
       }
   }, [state.effects]);
 
+  // Difficulty Change Logic
   useEffect(() => {
     if (currentDifficulty.level > prevDifficulty.current && !state.gameOver) {
       setTimeout(() => {
@@ -775,6 +944,13 @@ const App = () => {
       prevDifficulty.current = currentDifficulty.level;
     }
   }, [currentDifficulty.level, state.gameOver, currentDifficulty.name]);
+
+  useEffect(() => {
+    if (state.difficultyModal) {
+      const timer = setTimeout(() => dispatch({ type: 'CLOSE_DIFFICULTY_MODAL' }), 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [state.difficultyModal]);
 
   // Restart confirmation timeout
   useEffect(() => {
@@ -1138,13 +1314,16 @@ const App = () => {
 
   if (view === 'home') {
     return (
-      <div className="fixed inset-0 bg-slate-950 text-slate-100 font-sans flex flex-col items-center justify-center p-4">
+      <div className="fixed inset-0 bg-slate-950 text-slate-100 font-sans flex flex-col items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
         <div className="w-full max-w-md space-y-8 text-center animate-in fade-in zoom-in duration-500">
           <div className="space-y-2">
             <div className="flex justify-center mb-6">
-              <Grid3X3 className="w-20 h-20 text-blue-500 drop-shadow-[0_0_15px_rgba(59,130,246,0.5)]" />
+              <div className="relative">
+                 <div className="absolute inset-0 bg-blue-500 blur-2xl opacity-30 animate-pulse rounded-full" />
+                 <Grid3X3 className="w-20 h-20 text-blue-500 relative z-10" />
+              </div>
             </div>
-            <h1 className="text-4xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-blue-400 via-cyan-300 to-teal-200 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(0,0,0,0.3)]">
               BLOCK SUDOKU
             </h1>
             <p className="text-slate-400 text-lg">Master the grid.</p>
@@ -1154,7 +1333,7 @@ const App = () => {
             {hasSavedGame() && (
               <button
                 onClick={handleContinueGame}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-lg shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-3"
+                className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl font-bold text-lg shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-3 border border-blue-400/20"
               >
                 <Play className="w-6 h-6 fill-current" />
                 Continue Game
@@ -1163,7 +1342,11 @@ const App = () => {
             
             <button
               onClick={handleNewGame}
-              className={`w-full py-4 rounded-xl font-bold text-lg border-2 border-slate-700 hover:border-slate-600 hover:bg-slate-800 active:scale-95 transition-all flex items-center justify-center gap-3 ${!hasSavedGame() ? 'bg-blue-600 hover:bg-blue-500 border-none text-white shadow-lg shadow-blue-500/20' : 'text-slate-300'}`}
+              className={`w-full py-4 rounded-xl font-bold text-lg border transition-all flex items-center justify-center gap-3 ${
+                  !hasSavedGame() 
+                    ? 'bg-blue-600 hover:bg-blue-500 border-none text-white shadow-lg shadow-blue-500/20 active:scale-95' 
+                    : 'border-slate-700 hover:border-slate-500 hover:bg-slate-800 text-slate-300 active:scale-95'
+              }`}
             >
               {hasSavedGame() ? 'New Game' : <><Play className="w-6 h-6 fill-current" /> New Game</>}
             </button>
@@ -1172,14 +1355,14 @@ const App = () => {
           <div className="pt-8 flex flex-col items-center">
             <div className="text-slate-500 text-xs uppercase tracking-widest font-bold mb-2">High Score</div>
             <div className="text-3xl font-black text-white flex items-center gap-2">
-              <Trophy className="w-6 h-6 text-yellow-500" />
+              <Trophy className="w-6 h-6 text-yellow-500 drop-shadow-[0_0_8px_rgba(234,179,8,0.5)]" />
               {state.highScore}
             </div>
           </div>
           
           <button 
              onClick={() => dispatch({ type: 'TOGGLE_SOUND' })}
-             className="absolute bottom-8 right-8 p-3 bg-slate-800/50 rounded-full hover:bg-slate-700 transition-colors text-slate-400"
+             className="absolute bottom-8 right-8 p-3 bg-slate-800/50 rounded-full hover:bg-slate-700 transition-colors text-slate-400 border border-slate-700/50"
           >
             {state.soundEnabled ? <Volume2 className="w-5 h-5"/> : <VolumeX className="w-5 h-5"/>}
           </button>
@@ -1189,7 +1372,7 @@ const App = () => {
   }
 
   return (
-    <div className="fixed inset-0 bg-gradient-to-b from-slate-950 to-slate-900 text-slate-100 font-sans select-none overflow-hidden touch-none flex flex-col items-center">
+    <div className="fixed inset-0 bg-gradient-to-b from-slate-950 to-slate-900 text-slate-100 font-sans select-none overflow-hidden touch-none flex flex-col items-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900/50 via-slate-950 to-slate-950">
       
       {/* Header */}
       <div className="w-full max-w-2xl px-4 md:px-6 pt-4 md:pt-6 pb-3 shrink-0 z-10">
@@ -1202,7 +1385,7 @@ const App = () => {
           </div>
           
           {state.streak > 0 && (
-            <div className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-orange-500/20 to-red-500/20 rounded-full border border-orange-500/30">
+            <div className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-orange-500/20 to-red-500/20 rounded-full border border-orange-500/30 shadow-[0_0_10px_rgba(249,115,22,0.1)]">
               <Zap size={16} className="text-yellow-400 animate-pulse" />
               <span className="text-yellow-400 font-bold text-sm">{state.streak}x</span>
             </div>
@@ -1217,9 +1400,13 @@ const App = () => {
         </div>
         
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/50 rounded-full border border-slate-700">
-            <Activity className="w-3.5 h-3.5 text-green-400" />
-            <span className="text-sm font-bold text-green-400">{currentDifficulty.name}</span>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${
+              currentDifficulty.level > 1 
+                ? 'bg-slate-800/80 border-blue-500/50 shadow-[0_0_10px_rgba(59,130,246,0.2)]' 
+                : 'bg-slate-800/50 border-slate-700'
+          }`}>
+            <Activity className={`w-3.5 h-3.5 ${currentDifficulty.level > 1 ? 'text-blue-400' : 'text-green-400'}`} />
+            <span className={`text-sm font-bold ${currentDifficulty.level > 1 ? 'text-blue-400' : 'text-green-400'}`}>{currentDifficulty.name}</span>
           </div>
           
           <div className="flex items-center gap-2">
@@ -1248,14 +1435,14 @@ const App = () => {
             </button>
             <button 
                onClick={() => dispatch({ type: 'TOGGLE_PAUSE' })}
-               className={`p-2 rounded-lg transition-colors ${state.isPaused ? 'bg-yellow-500 text-slate-900' : 'bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+               className={`p-2 rounded-lg transition-colors ${state.isPaused ? 'bg-yellow-500 text-slate-900 shadow-lg shadow-yellow-500/20' : 'bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
             >
               {state.isPaused ? <Play className="w-4 h-4 fill-current"/> : <Pause className="w-4 h-4 fill-current"/>}
             </button>
             <button 
               onClick={handleResetClick}
               disabled={state.isPaused}
-              className={`p-2 rounded-lg transition-colors duration-200 ${state.isPaused ? 'bg-slate-800/30 opacity-50' : (confirmReset ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600/90 hover:bg-blue-500 active:bg-blue-700')}`}
+              className={`p-2 rounded-lg transition-colors duration-200 ${state.isPaused ? 'bg-slate-800/30 opacity-50' : (confirmReset ? 'bg-red-500 hover:bg-red-600 shadow-lg shadow-red-500/20' : 'bg-blue-600/90 hover:bg-blue-500 active:bg-blue-700')}`}
               title={confirmReset ? "Click again to confirm" : "Restart Game"}
             >
               <RefreshCw className={`w-4 h-4 text-white ${confirmReset ? 'animate-spin' : ''}`} />
@@ -1269,7 +1456,7 @@ const App = () => {
         <div 
           ref={gridRef}
           onClick={handleGridClick}
-          className={`relative bg-slate-900 p-2 rounded-2xl shadow-2xl border-2 transition-all ${
+          className={`relative bg-slate-900/80 backdrop-blur-sm p-2 rounded-2xl shadow-2xl border-2 transition-all ${
             state.activePowerUp === 'hammer' && !state.isPaused
               ? 'border-yellow-400 ring-4 ring-yellow-400/30 cursor-crosshair' 
               : 'border-slate-800'
@@ -1286,15 +1473,19 @@ const App = () => {
           {state.grid.map((row, r) => row.map((_, c) => renderCell(r, c)))}
           
           <FloatingTextOverlay effects={state.effects} />
+          <ParticleOverlay placed={state.placedCells} cleared={state.clearedCells} />
+
+          {/* Difficulty Announcement Modal */}
+          <DifficultyAnnouncement text={state.difficultyModal} />
 
           {/* Pause Overlay */}
           {state.isPaused && (
-             <div className="absolute inset-0 z-40 bg-slate-950/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center animate-in fade-in duration-200">
+             <div className="absolute inset-0 z-40 bg-slate-950/60 backdrop-blur-md rounded-xl flex flex-col items-center justify-center animate-in fade-in duration-200">
                <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-2xl flex flex-col gap-3 w-48">
                  <div className="text-center font-bold text-white text-xl mb-2">Paused</div>
                  <button 
                     onClick={() => dispatch({ type: 'RESUME_GAME' })}
-                    className="flex items-center justify-center gap-2 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-colors"
+                    className="flex items-center justify-center gap-2 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-colors shadow-lg shadow-blue-500/20"
                  >
                    <Play className="w-4 h-4 fill-current" /> Resume
                  </button>
@@ -1323,7 +1514,7 @@ const App = () => {
                  text-2xl md:text-4xl font-black px-6 py-3 rounded-2xl
                  bg-gradient-to-r text-white shadow-2xl
                  animate-in zoom-in-50 fade-in-0 duration-300
-                 ${state.comboText.includes('COMBO') || state.comboText.includes('SMASH') || state.comboText.includes('DIFFICULTY') 
+                 ${state.comboText.includes('COMBO') || state.comboText.includes('SMASH') 
                    ? 'from-red-500 to-orange-500' 
                    : 'from-yellow-400 to-amber-500 text-slate-900'}
                `}>
@@ -1349,24 +1540,30 @@ const App = () => {
         
         {state.gameOver && (
           <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
-             <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md" />
-             <div className="relative z-10 bg-slate-800/50 backdrop-blur-sm border-2 border-slate-700 rounded-3xl p-8 max-w-sm w-full animate-in zoom-in fade-in duration-300 text-center">
-                <Crown className="w-20 h-20 text-yellow-400 mb-4 mx-auto drop-shadow-[0_0_20px_rgba(250,204,21,0.5)]" />
+             <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl" />
+             <div className="relative z-10 bg-slate-800/80 backdrop-blur-md border border-slate-700/50 rounded-3xl p-8 max-w-sm w-full animate-in zoom-in fade-in duration-300 text-center shadow-2xl">
+                <div className="relative inline-block">
+                    <div className="absolute inset-0 bg-yellow-400 blur-2xl opacity-20 rounded-full" />
+                    <Crown className="w-20 h-20 text-yellow-400 mb-4 mx-auto relative z-10 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]" />
+                </div>
                 <div className="text-4xl md:text-5xl font-black text-white mb-3">Game Over</div>
-                <div className="text-slate-400 mb-2 text-sm font-medium">Final Score</div>
+                <div className="text-slate-400 mb-2 text-sm font-medium uppercase tracking-wider">Final Score</div>
                 <div className="text-5xl font-black text-white mb-8">{state.score}</div>
                 {state.score === state.highScore && state.score > 0 && (
-                  <div className="text-yellow-400 text-sm font-bold mb-4 animate-pulse">🏆 New High Score!</div>
+                  <div className="flex items-center justify-center gap-2 text-yellow-400 text-sm font-bold mb-6 animate-pulse bg-yellow-400/10 py-2 px-4 rounded-full">
+                      <Star className="w-4 h-4 fill-current" />
+                      New High Score!
+                  </div>
                 )}
                 <button 
                   onClick={() => dispatch({ type: 'RESET_GAME' })}
-                  className="w-full px-8 py-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-bold text-lg shadow-xl hover:shadow-blue-500/50 active:scale-95 transition-all mb-3"
+                  className="w-full px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl font-bold text-lg shadow-xl shadow-blue-500/20 active:scale-95 transition-all mb-3 border border-blue-400/20"
                 >
                   Play Again
                 </button>
                 <button 
                   onClick={handleHomeClick}
-                  className="w-full px-8 py-3 bg-slate-700 text-white rounded-xl font-bold text-lg hover:bg-slate-600 transition-all"
+                  className="w-full px-8 py-3 bg-slate-700/50 text-white rounded-xl font-bold text-lg hover:bg-slate-700 transition-all border border-slate-600/50"
                 >
                   Main Menu
                 </button>
@@ -1376,12 +1573,16 @@ const App = () => {
       </div>
 
       {/* Shapes Tray */}
-      <div className={`w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center transition-opacity duration-300 ${state.isPaused ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+      <div 
+        ref={trayRef}
+        className={`w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center transition-opacity duration-300 ${state.isPaused ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}
+      >
         <div className="flex items-center justify-center gap-3 md:gap-4 w-full">
           {state.availableShapes.map((shape, idx) => {
             const isDragging = state.draggingShape && state.draggingShape.uid === shape.uid;
             return (
               <div 
+                id={`shape-${shape.uid}`}
                 key={shape.uid}
                 className={`
                   flex-1 max-w-[140px] transition-all duration-300 
@@ -1395,9 +1596,9 @@ const App = () => {
                   cursor-grab active:cursor-grabbing 
                   p-4 md:p-5 
                   rounded-xl 
-                  hover:bg-slate-800/20
+                  hover:bg-slate-800/40
                   border border-transparent
-                  hover:border-slate-700/30
+                  hover:border-slate-700/50
                   transition-all 
                   active:scale-95 
                   aspect-square

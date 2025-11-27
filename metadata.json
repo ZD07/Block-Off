@@ -1,5 +1,5 @@
 {
-  "name": "Block Sudoku",
+  "name": "Block Off",
   "description": "A strategic puzzle game combining block placement with Sudoku logic. Clear lines and 3x3 squares to score points, maintain streaks, and use power-ups.",
   "requestFramePermissions": []
 }

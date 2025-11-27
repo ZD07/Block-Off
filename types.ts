@@ -1,3 +1,4 @@
+
 export type Grid = number[][];
 
 export interface Shape {
@@ -40,6 +41,17 @@ export interface FloatingText {
   text: string;
 }
 
+export interface Particle {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  color: string;
+  size: number;
+}
+
 export interface GameState {
   grid: Grid;
   availableShapes: Shape[];
@@ -56,6 +68,7 @@ export interface GameState {
   };
   activePowerUp: 'hammer' | 'refresh' | null;
   comboText: string | null;
+  difficultyModal: string | null;
   draggingShape: Shape | null;
   ghostPosition: { r: number; c: number } | null;
   previewClears: Set<string>;
@@ -85,6 +98,7 @@ export type GameAction =
   | { type: 'CLEAR_COMBO_TEXT' }
   | { type: 'CLEAR_SOUND_EFFECT' }
   | { type: 'SHOW_DIFFICULTY_CHANGE'; payload: string }
+  | { type: 'CLOSE_DIFFICULTY_MODAL' }
   | { type: 'UNDO' }
   | { type: 'TOGGLE_PAUSE' }
   | { type: 'RESUME_GAME' }
