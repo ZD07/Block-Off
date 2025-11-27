@@ -1,9 +1,11 @@
 
-export type Grid = number[][];
+
+export type Grid = (string | null)[][];
 
 export interface Shape {
   id: string;
   matrix: number[][];
+  color: string;
   uid?: number;
 }
 
@@ -32,6 +34,8 @@ export interface HistoryState {
     hammer: number;
     refresh: number;
   };
+  holdShape: Shape | null;
+  canHold: boolean;
 }
 
 export interface FloatingText {
@@ -55,6 +59,8 @@ export interface Particle {
 export interface GameState {
   grid: Grid;
   availableShapes: Shape[];
+  holdShape: Shape | null;
+  canHold: boolean;
   score: number;
   highScore: number;
   gameOver: boolean;
@@ -73,7 +79,7 @@ export interface GameState {
   ghostPosition: { r: number; c: number } | null;
   previewClears: Set<string>;
   previewScore: number;
-  soundEffectToPlay: 'pickup' | 'drop' | 'clear' | 'rotate' | null;
+  soundEffectToPlay: { type: 'pickup' | 'drop' | 'clear' | 'rotate'; pitch?: number } | null;
   history: HistoryState[];
   placedCells: { r: number; c: number }[];
   clearedCells: { r: number; c: number }[];
@@ -93,6 +99,7 @@ export type GameAction =
   | { type: 'UPDATE_GHOST'; payload: { r: number; c: number; matrix: number[][] } }
   | { type: 'CLEAR_GHOST' }
   | { type: 'PLACE_SHAPE' }
+  | { type: 'HOLD_SHAPE' }
   | { type: 'CANCEL_DRAG' }
   | { type: 'STOP_SCORE_POP' }
   | { type: 'CLEAR_COMBO_TEXT' }
@@ -102,6 +109,6 @@ export type GameAction =
   | { type: 'UNDO' }
   | { type: 'TOGGLE_PAUSE' }
   | { type: 'RESUME_GAME' }
-  | { type: 'LOAD_GAME'; payload: GameState }
+  | { type: 'LOAD_GAME'; payload: any }
   | { type: 'REMOVE_EFFECT'; payload: number }
   | { type: 'CLEAR_ANIMATIONS' };

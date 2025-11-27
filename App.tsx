@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect, useRef, useCallback, useReducer, useLayoutEffect } from 'react';
-import { RefreshCw, Trophy, Crown, Zap, Volume2, VolumeX, RotateCw, Hammer, Repeat, Activity, Undo2, Pause, Play, Home, Grid3X3, Star } from 'lucide-react';
+import { RefreshCw, Trophy, Crown, Zap, Volume2, VolumeX, RotateCw, Hammer, Repeat, Activity, Undo2, Pause, Play, Home, Grid3X3, Star, Hand } from 'lucide-react';
 import { GRID_SIZE, SCORING, POWERUP_REWARDS, SHAPES_DATA } from './constants';
 import { GameState, GameAction, Shape, Grid, DifficultyTier, DragState, HistoryState, FloatingText, Particle } from './types';
 
@@ -69,7 +70,7 @@ const canPlaceShape = (matrix: number[][], r: number, c: number, currentGrid: Gr
       if (matrix[i][j] === 1) {
         const gr = r + i, gc = c + j;
         if (gr < 0 || gr >= GRID_SIZE || gc < 0 || gc >= GRID_SIZE) return false;
-        if (currentGrid[gr][gc] === 1) return false;
+        if (currentGrid[gr][gc] !== null) return false;
       }
     }
   }
@@ -91,10 +92,10 @@ const getPotentialClears = (gridToCheck: Grid) => {
   let rows: number[] = [], cols: number[] = [], squares: number[][] = [];
   
   for (let r = 0; r < GRID_SIZE; r++) {
-    if (gridToCheck[r].every(cell => cell === 1)) rows.push(r);
+    if (gridToCheck[r].every(cell => cell !== null)) rows.push(r);
   }
   for (let c = 0; c < GRID_SIZE; c++) {
-    if (gridToCheck.every(row => row[c] === 1)) cols.push(c);
+    if (gridToCheck.every(row => row[c] !== null)) cols.push(c);
   }
   
   for (let r = 0; r < GRID_SIZE; r += 3) {
@@ -102,7 +103,7 @@ const getPotentialClears = (gridToCheck: Grid) => {
       let full = true;
       for (let i = 0; i < 3; i++) {
         for (let j = 0; j < 3; j++) {
-          if (gridToCheck[r + i][c + j] === 0) full = false;
+          if (gridToCheck[r + i][c + j] === null) full = false;
         }
       }
       if (full) squares.push([r, c]);
@@ -120,14 +121,14 @@ const getPotentialClears = (gridToCheck: Grid) => {
   };
 };
 
-const calculateScoreResult = (originalGrid: Grid, r: number, c: number, shapeMatrix: number[][], currentStreak: number) => {
+const calculateScoreResult = (originalGrid: Grid, r: number, c: number, shape: Shape, currentStreak: number) => {
   const newGrid = originalGrid.map(row => [...row]);
   let blocksPlaced = 0;
 
-  shapeMatrix.forEach((row, i) => {
+  shape.matrix.forEach((row, i) => {
     row.forEach((val, j) => {
       if (val === 1) {
-        newGrid[r + i][c + j] = 1;
+        newGrid[r + i][c + j] = shape.color;
         blocksPlaced++;
       }
     });
@@ -183,7 +184,7 @@ const getAudioContext = () => {
   return audioContext;
 };
 
-const playSound = (type: string, soundEnabled: boolean) => {
+const playSound = (type: string, soundEnabled: boolean, pitchMultiplier: number = 1) => {
   if (!soundEnabled) return;
   const ctx = getAudioContext();
   if (!ctx) return;
@@ -195,6 +196,9 @@ const playSound = (type: string, soundEnabled: boolean) => {
     osc.connect(gain);
     gain.connect(ctx.destination);
     const now = ctx.currentTime;
+    
+    // Clamp multiplier
+    const pm = Math.min(2.0, Math.max(1.0, 1 + (pitchMultiplier * 0.1)));
 
     if (type === 'pickup') {
       osc.type = 'sine';
@@ -222,9 +226,9 @@ const playSound = (type: string, soundEnabled: boolean) => {
       osc.stop(now + 0.15);
     } else if (type === 'clear') {
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(400, now);
-      osc.frequency.linearRampToValueAtTime(800, now + 0.1);
-      osc.frequency.linearRampToValueAtTime(1200, now + 0.2);
+      osc.frequency.setValueAtTime(400 * pm, now);
+      osc.frequency.linearRampToValueAtTime(800 * pm, now + 0.1);
+      osc.frequency.linearRampToValueAtTime(1200 * pm, now + 0.2);
       gain.gain.setValueAtTime(0.1, now);
       gain.gain.linearRampToValueAtTime(0, now + 0.3);
       osc.start(now);
@@ -303,7 +307,7 @@ const ParticleOverlay = ({ placed, cleared }: { placed: {r: number, c: number}[]
                 vx: (Math.random() - 0.5) * 0.5,
                 vy: (Math.random() - 0.5) * 0.5,
                 life: 1.0,
-                color: '#60a5fa', // blue-400
+                color: '#60a5fa', 
                 size: Math.random() * 3 + 2
             });
         }
@@ -321,7 +325,7 @@ const ParticleOverlay = ({ placed, cleared }: { placed: {r: number, c: number}[]
                 vx: Math.cos(angle) * speed,
                 vy: Math.sin(angle) * speed,
                 life: 1.0,
-                color: Math.random() > 0.5 ? '#ffffff' : '#fbbf24', // white or amber
+                color: Math.random() > 0.5 ? '#ffffff' : '#fbbf24', 
                 size: Math.random() * 4 + 3
             });
         }
@@ -380,8 +384,6 @@ const ParticleOverlay = ({ placed, cleared }: { placed: {r: number, c: number}[]
 
 const DifficultyAnnouncement = ({ text }: { text: string | null }) => {
   if (!text) return null;
-  
-  // Extract level name from string if possible, or just use the text
   const levelName = text.replace('DIFFICULTY:', '').replace('!', '').trim();
 
   return (
@@ -415,8 +417,10 @@ const loadHighScore = () => {
 };
 
 const initialState: GameState = {
-  grid: Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(0)),
+  grid: Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null)),
   availableShapes: [],
+  holdShape: null,
+  canHold: true,
   score: 0,
   highScore: loadHighScore(),
   gameOver: false,
@@ -444,7 +448,9 @@ const createHistorySnapshot = (state: GameState): HistoryState => ({
   availableShapes: state.availableShapes,
   score: state.score,
   streak: state.streak,
-  powerUps: { ...state.powerUps }
+  powerUps: { ...state.powerUps },
+  holdShape: state.holdShape,
+  canHold: state.canHold
 });
 
 const gameReducer = (state: GameState, action: GameAction): GameState => {
@@ -485,14 +491,29 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
 
     case 'ROTATE_SHAPE_IN_TRAY': {
         const { index } = action.payload;
+        
+        // Handle Hold Shape Rotation (index -999)
+        if (index === -999) {
+            if (!state.holdShape) return state;
+            const newMatrix = rotateMatrix(state.holdShape.matrix);
+            return {
+                ...state,
+                holdShape: { ...state.holdShape, matrix: newMatrix },
+                soundEffectToPlay: { type: 'rotate' }
+            };
+        }
+
         const shapes = [...state.availableShapes];
         const shape = shapes[index];
+        // Guard against undefined shape if index is stale
+        if (!shape) return state;
+
         const newMatrix = rotateMatrix(shape.matrix);
         shapes[index] = { ...shape, matrix: newMatrix };
         return {
             ...state,
             availableShapes: shapes,
-            soundEffectToPlay: 'rotate'
+            soundEffectToPlay: { type: 'rotate' }
         };
     }
     
@@ -502,7 +523,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
           return {
             ...state,
             comboText: 'NO POWER-UPS LEFT! 😢',
-            soundEffectToPlay: 'drop'
+            soundEffectToPlay: { type: 'drop' }
           };
         }
         
@@ -514,7 +535,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
           ...state, 
           activePowerUp: action.payload, 
           draggingShape: null, 
-          soundEffectToPlay: 'pickup' 
+          soundEffectToPlay: { type: 'pickup' }
         };
     }
 
@@ -530,7 +551,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
             powerUps: { ...state.powerUps, refresh: state.powerUps.refresh - 1 },
             activePowerUp: null,
             availableShapes: [], 
-            soundEffectToPlay: 'drop',
+            soundEffectToPlay: { type: 'drop' },
             comboText: 'FRESH START!',
             effects: [...state.effects, { id: Date.now(), r: 4, c: 4, text: "Refresh!" }]
         };
@@ -545,7 +566,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         for (let row = r - 1; row <= r + 1; row++) {
             for (let col = c - 1; col <= c + 1; col++) {
                 if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
-                    if (state.grid[row][col] === 1) {
+                    if (state.grid[row][col] !== null) {
                         hasFilledCells = true;
                         break;
                     }
@@ -559,7 +580,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
                 ...state,
                 activePowerUp: null,
                 comboText: 'NO BLOCKS TO CLEAR! 🔨',
-                soundEffectToPlay: 'drop'
+                soundEffectToPlay: { type: 'drop' }
             };
         }
 
@@ -574,8 +595,8 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         for (let row = r - 1; row <= r + 1; row++) {
             for (let col = c - 1; col <= c + 1; col++) {
                 if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
-                    if (newGrid[row][col] === 1) {
-                         newGrid[row][col] = 0;
+                    if (newGrid[row][col] !== null) {
+                         newGrid[row][col] = null;
                          cellsCleared.add(`${row},${col}`);
                          clearedCoords.push({r: row, c: col});
                     }
@@ -595,7 +616,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
             activePowerUp: null,
             scorePop: true,
             comboText: null, 
-            soundEffectToPlay: 'clear',
+            soundEffectToPlay: { type: 'clear', pitch: 1 },
             clearedCells: clearedCoords,
             effects: [...state.effects, { id: Date.now(), r, c, text: `+${points}` }, { id: Date.now()+1, r: Math.max(0, r-1), c, text: 'HAMMER SMASH!' }]
         };
@@ -607,14 +628,43 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         ...state,
         draggingShape: action.payload, 
         activePowerUp: null, 
-        soundEffectToPlay: 'pickup',
+        soundEffectToPlay: { type: 'pickup' },
       };
+      
+    case 'HOLD_SHAPE': {
+        if (!state.canHold || !state.draggingShape) return state;
+        
+        const currentShape = { ...state.draggingShape };
+        const oldHold = state.holdShape ? { ...state.holdShape } : null;
+        
+        const snapshot = createHistorySnapshot(state);
+        const newHistory = [snapshot];
+        
+        let newAvailableShapes = state.availableShapes.filter(s => s.uid !== currentShape.uid);
+        
+        if (oldHold) {
+            // Re-insert old hold shape with new UID to ensure React key uniqueness
+            newAvailableShapes.push({ ...oldHold, uid: Date.now() });
+        }
+        
+        return {
+            ...state,
+            history: newHistory,
+            holdShape: currentShape,
+            availableShapes: newAvailableShapes,
+            canHold: false,
+            draggingShape: null,
+            ghostPosition: null,
+            soundEffectToPlay: { type: 'pickup' } // Swish sound
+        };
+    }
 
     case 'UPDATE_GHOST': {
       const { r, c, matrix } = action.payload;
+      if (!state.draggingShape) return state;
       
       const { points, clearedSet } = calculateScoreResult(
-        state.grid, r, c, matrix, state.streak
+        state.grid, r, c, state.draggingShape, state.streak
       );
 
       return {
@@ -639,7 +689,6 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
       const { r, c } = state.ghostPosition;
       const shape = state.draggingShape;
 
-      // Save history before modifying state
       const snapshot = createHistorySnapshot(state);
       const newHistory = [snapshot];
 
@@ -650,7 +699,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         clearedCount, 
         comboText, 
         hammerBonus 
-      } = calculateScoreResult(state.grid, r, c, shape.matrix, state.streak);
+      } = calculateScoreResult(state.grid, r, c, shape, state.streak);
       
       const newlyPlaced: {r: number, c: number}[] = [];
       shape.matrix.forEach((row, idx) => {
@@ -663,7 +712,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
       if (clearedSet.size > 0) {
         clearedSet.forEach(key => {
           const [cr, cc] = key.split(',').map(Number);
-          newGrid[cr][cc] = 0;
+          newGrid[cr][cc] = null;
           newlyCleared.push({r: cr, c: cc});
         });
       }
@@ -678,7 +727,6 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
       
       const newEffects = [...state.effects, { id: Date.now(), r, c, text: `+${Math.floor(points)}` }];
       if (comboText) {
-          // Use effects for combos instead of static center text
           newEffects.push({ id: Date.now() + 1, r: Math.max(0, r-1), c, text: comboText });
       }
 
@@ -690,13 +738,14 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         streak: newStreak,
         powerUps: newPowerUps,
         availableShapes: state.availableShapes.filter(s => s.uid !== shape.uid),
+        canHold: true, // Re-enable hold after placement
         draggingShape: null,
         ghostPosition: null,
         previewClears: new Set(),
         previewScore: 0,
         scorePop: true,
         comboText: null, 
-        soundEffectToPlay: clearedCount > 0 ? 'clear' : 'drop',
+        soundEffectToPlay: clearedCount > 0 ? { type: 'clear', pitch: newStreak } : { type: 'drop' },
         placedCells: newlyPlaced,
         clearedCells: newlyCleared,
         effects: newEffects
@@ -715,6 +764,8 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         score: previous.score,
         streak: previous.streak,
         powerUps: previous.powerUps,
+        holdShape: previous.holdShape,
+        canHold: previous.canHold,
         history: newHistory,
         gameOver: false,
         activePowerUp: null,
@@ -764,7 +815,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
       return {
         ...state,
         difficultyModal: action.payload,
-        soundEffectToPlay: 'clear'
+        soundEffectToPlay: { type: 'clear', pitch: 1 }
       };
 
     case 'CLOSE_DIFFICULTY_MODAL':
@@ -814,6 +865,7 @@ const App = () => {
   const [confirmReset, setConfirmReset] = useState(false);
   
   const gridRef = useRef<HTMLDivElement>(null);
+  const holdRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState>({ 
     start: { x: 0, y: 0 }, 
     offset: { x: 0, y: 0 },
@@ -826,8 +878,6 @@ const App = () => {
   
   const lastGhostPos = useRef<string | null>(null);
   const lastUndoRef = useRef(0);
-  
-  // Tray animation refs
   const prevShapesRef = useRef<Shape[]>([]);
   const trayRef = useRef<HTMLDivElement>(null);
 
@@ -840,34 +890,24 @@ const App = () => {
     } catch { return false; }
   };
 
-  // FLIP Animation for Tray
   useLayoutEffect(() => {
     if (!trayRef.current) return;
-    
-    // 1. Snapshot previous positions
     const prevPositions = new Map();
     prevShapesRef.current.forEach(shape => {
         const el = document.getElementById(`shape-${shape.uid}`);
         if (el) prevPositions.set(shape.uid, el.getBoundingClientRect());
     });
     
-    // 2. Browser updates DOM with new state (happens automatically before this runs)
-    
-    // 3. Calculate changes and apply invert transform
     state.availableShapes.forEach(shape => {
         const el = document.getElementById(`shape-${shape.uid}`);
         const prevRect = prevPositions.get(shape.uid);
-        
         if (el && prevRect) {
             const currentRect = el.getBoundingClientRect();
             const deltaX = prevRect.left - currentRect.left;
             const deltaY = prevRect.top - currentRect.top;
-            
             if (deltaX !== 0 || deltaY !== 0) {
                 el.style.transition = 'none';
                 el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-                
-                // 4. Play animation
                 requestAnimationFrame(() => {
                     el.style.transition = 'transform 300ms cubic-bezier(0.2, 0, 0.2, 1)';
                     el.style.transform = '';
@@ -875,12 +915,10 @@ const App = () => {
             }
         }
     });
-    
     prevShapesRef.current = state.availableShapes;
   }, [state.availableShapes]);
 
 
-  // Auto-save effect
   useEffect(() => {
     if (view !== 'game') return;
 
@@ -913,7 +951,6 @@ const App = () => {
     return () => clearTimeout(timer);
   }, [state, view]);
   
-  // Cleanup effects
   useEffect(() => {
       if (state.placedCells.length > 0 || state.clearedCells.length > 0) {
           const timer = setTimeout(() => {
@@ -932,7 +969,6 @@ const App = () => {
       }
   }, [state.effects]);
 
-  // Difficulty Change Logic
   useEffect(() => {
     if (currentDifficulty.level > prevDifficulty.current && !state.gameOver) {
       setTimeout(() => {
@@ -952,7 +988,6 @@ const App = () => {
     }
   }, [state.difficultyModal]);
 
-  // Restart confirmation timeout
   useEffect(() => {
     if (confirmReset) {
       const timer = setTimeout(() => setConfirmReset(false), 3000);
@@ -960,14 +995,12 @@ const App = () => {
     }
   }, [confirmReset]);
 
-  // --- EFFECT HANDLERS ---
-  
   useEffect(() => {
     if (state.soundEffectToPlay) {
-      playSound(state.soundEffectToPlay, state.soundEnabled);
+      playSound(state.soundEffectToPlay.type, state.soundEnabled, state.soundEffectToPlay.pitch);
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
-          if (state.soundEffectToPlay === 'clear') navigator.vibrate(20);
-          else if (state.soundEffectToPlay === 'drop' || state.soundEffectToPlay === 'rotate') navigator.vibrate(5);
+          if (state.soundEffectToPlay.type === 'clear') navigator.vibrate(20);
+          else if (['drop', 'rotate', 'pickup'].includes(state.soundEffectToPlay.type)) navigator.vibrate(5);
       }
       dispatch({ type: 'CLEAR_SOUND_EFFECT' });
     }
@@ -987,7 +1020,6 @@ const App = () => {
     }
   }, [state.comboText]);
 
-  // --- SHAPE GENERATION ---
   const generateShapes = useCallback((currentGrid: Grid, currentScore: number) => {
     const shapePool = getShapePoolByScore(currentScore);
     
@@ -1025,12 +1057,10 @@ const App = () => {
       generateShapes(state.grid, state.score);
     } else {
       const canMove = checkPlayability(state.availableShapes, state.grid);
-      if (!canMove) dispatch({ type: 'SET_GAME_OVER' });
+      if (!canMove && !state.canHold) dispatch({ type: 'SET_GAME_OVER' }); // Also check hold? Ideally check hold first, but simpler to just end.
     }
-  }, [state.availableShapes, state.gameOver, state.grid, state.score, generateShapes, view]);
+  }, [state.availableShapes, state.gameOver, state.grid, state.score, generateShapes, view, state.canHold]);
 
-  // --- INTERACTION HANDLERS ---
-  
   const getClientCoords = (e: React.TouchEvent | React.MouseEvent | MouseEvent | TouchEvent) => {
     if ('touches' in e && e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
     if ('clientX' in e) return { x: e.clientX, y: e.clientY };
@@ -1051,7 +1081,6 @@ const App = () => {
     }
     
     const coords = getClientCoords(e);
-    
     const isTouch = e.pointerType === 'touch';
     const offsetY = isTouch ? -70 : 0;
 
@@ -1087,7 +1116,7 @@ const App = () => {
 
   const handleUndo = () => {
     const now = Date.now();
-    if (now - lastUndoRef.current < 300) return; // 300ms debounce
+    if (now - lastUndoRef.current < 300) return; 
     lastUndoRef.current = now;
     dispatch({ type: 'UNDO' });
   };
@@ -1096,7 +1125,7 @@ const App = () => {
     if (confirmReset) {
       dispatch({ type: 'RESET_GAME' });
       setConfirmReset(false);
-      dispatch({ type: 'RESUME_GAME' }); // Ensure unpaused
+      dispatch({ type: 'RESUME_GAME' });
     } else {
       setConfirmReset(true);
     }
@@ -1116,6 +1145,10 @@ const App = () => {
       const saved = localStorage.getItem(SAVE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
+        // Migration logic for old saves (number grid -> color grid)
+        if (parsed.grid && parsed.grid.length > 0 && typeof parsed.grid[0][0] === 'number') {
+           parsed.grid = parsed.grid.map((row: any[]) => row.map((cell: number) => cell === 1 ? '#60a5fa' : null));
+        }
         dispatch({ type: 'LOAD_GAME', payload: parsed });
         setView('game');
       }
@@ -1123,7 +1156,7 @@ const App = () => {
   };
 
   const updateGhostLogic = useCallback((x: number, y: number, shape: Shape) => {
-    if (!gridRef.current) return;
+    if (!gridRef.current || !shape) return; // Added safety check for shape
     const rect = gridRef.current.getBoundingClientRect();
     const cellSize = rect.width / GRID_SIZE;
     const matrix = shape.matrix;
@@ -1137,7 +1170,6 @@ const App = () => {
     const col = Math.round((relX - (matrixW / 2) + (cellSize/2)) / cellSize);
     const row = Math.round((relY - (matrixH / 2) + (cellSize/2)) / cellSize);
 
-    // Magnetic snap
     let validPos = null;
     if (canPlaceShape(matrix, row, col, state.grid)) {
         validPos = { r: row, c: col };
@@ -1170,7 +1202,6 @@ const App = () => {
       if (!dragRef.current.active) return;
       
       const coords = getClientCoords(e);
-      
       const moveDist = Math.hypot(coords.x - dragRef.current.start.x, coords.y - dragRef.current.start.y);
       const timeSinceStart = Date.now() - dragRef.current.startTime;
       
@@ -1196,7 +1227,7 @@ const App = () => {
       updateGhostLogic(x, y, dragRef.current.shape);
     };
 
-    const handleUp = () => {
+    const handleUp = (e: MouseEvent | TouchEvent) => {
       if (!dragRef.current.active) return;
       dragRef.current.active = false;
 
@@ -1209,8 +1240,20 @@ const App = () => {
         return;
       }
 
-      // Drag drop
+      // Drop Logic
       if (state.draggingShape) {
+          // Check for Hold Drop
+          if (holdRef.current && state.canHold) {
+              const holdRect = holdRef.current.getBoundingClientRect();
+              const coords = getClientCoords(e);
+              // Simple AABB check
+              if (coords.x >= holdRect.left && coords.x <= holdRect.right &&
+                  coords.y >= holdRect.top && coords.y <= holdRect.bottom) {
+                  dispatch({ type: 'HOLD_SHAPE' });
+                  return;
+              }
+          }
+
           if (state.ghostPosition) {
             dispatch({ type: 'PLACE_SHAPE' });
           } else {
@@ -1230,11 +1273,11 @@ const App = () => {
       window.removeEventListener('mouseup', handleUp);
       window.removeEventListener('touchend', handleUp);
     };
-  }, [state.draggingShape, state.ghostPosition, state.gameOver, state.activePowerUp, updateGhostLogic, state.isPaused]);
+  }, [state.draggingShape, state.ghostPosition, state.gameOver, state.activePowerUp, updateGhostLogic, state.isPaused, state.canHold]);
 
   // --- RENDER HELPERS ---
   const renderCell = (r: number, c: number) => {
-    const cellValue = state.grid[r][c];
+    const cellValue = state.grid[r][c]; // string color or null
     
     let isGhost = false;
     if (state.ghostPosition && state.draggingShape && state.activePowerUp !== 'hammer') {
@@ -1256,26 +1299,30 @@ const App = () => {
     if (isJustCleared) {
         baseClass += "bg-white animate-clear shadow-[0_0_15px_rgba(255,255,255,0.8)] border-white";
     } else if (isJustPlaced) {
-        baseClass += "bg-blue-400 animate-pop border-blue-300";
+        // We need inline style for color, so this class is for animation
+        baseClass += "animate-pop border-transparent";
     } else if (isAboutToClear) {
       baseClass += "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] border-cyan-200";
-    } else if (cellValue === 1) {
-      baseClass += "bg-blue-500 shadow-md border-blue-400/30";
+    } else if (cellValue) {
+      baseClass += "shadow-md border-white/20";
     } else if (isGhost) {
-      baseClass += "bg-blue-400/20 border-2 border-dashed border-blue-400/60 animate-pulse";
+      baseClass += "border-2 border-dashed border-white/60 animate-pulse bg-white/10";
     } else {
       const isAlt = (Math.floor(r/3) + Math.floor(c/3)) % 2 === 0;
       baseClass += (isAlt ? "bg-slate-800" : "bg-slate-800/80") + " border-transparent";
     }
 
+    const style: React.CSSProperties = {
+        marginRight: (c + 1) % 3 === 0 && c !== 8 ? '2px' : '0',
+        marginBottom: (r + 1) % 3 === 0 && r !== 8 ? '2px' : '0',
+        backgroundColor: (cellValue && !isAboutToClear && !isJustCleared) ? cellValue : undefined
+    };
+
     return (
       <div 
         key={`${r}-${c}`}
         className={baseClass}
-        style={{
-          marginRight: (c + 1) % 3 === 0 && c !== 8 ? '2px' : '0',
-          marginBottom: (r + 1) % 3 === 0 && r !== 8 ? '2px' : '0',
-        }}
+        style={style}
       />
     );
   };
@@ -1310,8 +1357,6 @@ const App = () => {
       return null;
   };
 
-  // --- VIEW RENDERING ---
-
   if (view === 'home') {
     return (
       <div className="fixed inset-0 bg-slate-950 text-slate-100 font-sans flex flex-col items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
@@ -1324,7 +1369,7 @@ const App = () => {
               </div>
             </div>
             <h1 className="text-4xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-blue-400 via-cyan-300 to-teal-200 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(0,0,0,0.3)]">
-              BLOCK SUDOKU
+              BLOCK OFF
             </h1>
             <p className="text-slate-400 text-lg">Master the grid.</p>
           </div>
@@ -1474,11 +1519,8 @@ const App = () => {
           
           <FloatingTextOverlay effects={state.effects} />
           <ParticleOverlay placed={state.placedCells} cleared={state.clearedCells} />
-
-          {/* Difficulty Announcement Modal */}
           <DifficultyAnnouncement text={state.difficultyModal} />
 
-          {/* Pause Overlay */}
           {state.isPaused && (
              <div className="absolute inset-0 z-40 bg-slate-950/60 backdrop-blur-md rounded-xl flex flex-col items-center justify-center animate-in fade-in duration-200">
                <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-2xl flex flex-col gap-3 w-48">
@@ -1572,12 +1614,38 @@ const App = () => {
         )}
       </div>
 
-      {/* Shapes Tray */}
+      {/* Shapes Tray with Hold Slot */}
       <div 
         ref={trayRef}
-        className={`w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center transition-opacity duration-300 ${state.isPaused ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}
+        className={`w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center gap-2 transition-opacity duration-300 ${state.isPaused ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}
       >
-        <div className="flex items-center justify-center gap-3 md:gap-4 w-full">
+        {/* Hold Slot */}
+        <div 
+            ref={holdRef}
+            className={`
+                flex-none w-20 h-20 md:w-24 md:h-24 rounded-xl border-2 border-dashed 
+                flex flex-col items-center justify-center gap-1
+                transition-all duration-200
+                ${state.canHold && state.draggingShape ? 'border-yellow-400 bg-yellow-400/10 scale-105' : 'border-slate-700 bg-slate-800/30'}
+            `}
+        >
+            {state.holdShape ? (
+                <div className="scale-75 cursor-grab active:cursor-grabbing p-2" onPointerDown={(e) => handlePointerDown(e, state.holdShape!, -999)}>
+                    <MiniGrid matrix={state.holdShape.matrix} color={state.holdShape.color} />
+                </div>
+            ) : (
+                <>
+                    <Hand className={`w-5 h-5 ${state.canHold && state.draggingShape ? 'text-yellow-400 animate-bounce' : 'text-slate-600'}`} />
+                    <span className="text-[10px] text-slate-600 font-bold uppercase">Hold</span>
+                </>
+            )}
+        </div>
+
+        {/* Separator */}
+        <div className="w-px h-16 bg-slate-800 mx-2" />
+
+        {/* Shapes */}
+        <div className="flex-1 flex items-center justify-center gap-3 md:gap-4">
           {state.availableShapes.map((shape, idx) => {
             const isDragging = state.draggingShape && state.draggingShape.uid === shape.uid;
             return (
@@ -1585,7 +1653,7 @@ const App = () => {
                 id={`shape-${shape.uid}`}
                 key={shape.uid}
                 className={`
-                  flex-1 max-w-[140px] transition-all duration-300 
+                  flex-1 max-w-[120px] transition-all duration-300 
                   ${isDragging ? 'opacity-0 scale-90' : 'opacity-100 scale-100'}
                   animate-enter
                 `}
@@ -1594,7 +1662,7 @@ const App = () => {
               >
                 <div className="
                   cursor-grab active:cursor-grabbing 
-                  p-4 md:p-5 
+                  p-3 md:p-4 
                   rounded-xl 
                   hover:bg-slate-800/40
                   border border-transparent
@@ -1606,8 +1674,8 @@ const App = () => {
                   relative
                   group
                 ">
-                  <MiniGrid matrix={shape.matrix} />
-                  <div className="absolute bottom-1.5 right-1.5 opacity-0 group-hover:opacity-40 transition-opacity">
+                  <MiniGrid matrix={shape.matrix} color={shape.color} />
+                  <div className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-40 transition-opacity">
                     <RotateCw className="w-3 h-3 text-slate-400" />
                   </div>
                 </div>
@@ -1625,7 +1693,7 @@ const App = () => {
       >
         {state.draggingShape && (
            <div className="opacity-95 scale-110 -rotate-12 drop-shadow-[0_20px_20px_rgba(0,0,0,0.5)] transition-all duration-200 ease-out">
-             <MiniGrid matrix={state.draggingShape.matrix} isDrag />
+             <MiniGrid matrix={state.draggingShape.matrix} isDrag color={state.draggingShape.color} />
            </div>
         )}
       </div>
@@ -1633,7 +1701,7 @@ const App = () => {
   );
 };
 
-const MiniGrid = ({ matrix, isDrag }: { matrix: number[][], isDrag?: boolean }) => {
+const MiniGrid = ({ matrix, isDrag, color }: { matrix: number[][], isDrag?: boolean, color?: string }) => {
   return (
     <div 
       style={{ 
@@ -1651,8 +1719,12 @@ const MiniGrid = ({ matrix, isDrag }: { matrix: number[][], isDrag?: boolean }) 
               ${isDrag ? 'w-7 h-7' : 'w-4 h-4 md:w-5 md:h-5'} 
               rounded-sm
               transition-all
-              ${val ? 'bg-blue-500 shadow-lg border-2 border-blue-400/60' : 'bg-transparent'}
             `}
+            style={{
+                backgroundColor: val ? (color || '#60a5fa') : 'transparent',
+                boxShadow: val ? `0 0 10px ${color || '#60a5fa'}80` : 'none',
+                border: val ? '1px solid rgba(255,255,255,0.3)' : 'none'
+            }}
           />
         ))
       )}
