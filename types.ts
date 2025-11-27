@@ -33,6 +33,13 @@ export interface HistoryState {
   };
 }
 
+export interface FloatingText {
+  id: number;
+  r: number;
+  c: number;
+  text: string;
+}
+
 export interface GameState {
   grid: Grid;
   availableShapes: Shape[];
@@ -42,6 +49,7 @@ export interface GameState {
   streak: number;
   scorePop: boolean;
   soundEnabled: boolean;
+  isPaused: boolean;
   powerUps: {
     hammer: number;
     refresh: number;
@@ -54,6 +62,9 @@ export interface GameState {
   previewScore: number;
   soundEffectToPlay: 'pickup' | 'drop' | 'clear' | 'rotate' | null;
   history: HistoryState[];
+  placedCells: { r: number; c: number }[];
+  clearedCells: { r: number; c: number }[];
+  effects: FloatingText[];
 }
 
 export type GameAction =
@@ -74,4 +85,9 @@ export type GameAction =
   | { type: 'CLEAR_COMBO_TEXT' }
   | { type: 'CLEAR_SOUND_EFFECT' }
   | { type: 'SHOW_DIFFICULTY_CHANGE'; payload: string }
-  | { type: 'UNDO' };
+  | { type: 'UNDO' }
+  | { type: 'TOGGLE_PAUSE' }
+  | { type: 'RESUME_GAME' }
+  | { type: 'LOAD_GAME'; payload: GameState }
+  | { type: 'REMOVE_EFFECT'; payload: number }
+  | { type: 'CLEAR_ANIMATIONS' };

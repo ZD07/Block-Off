@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useReducer } from 'react';
-import { RefreshCw, Trophy, Crown, Zap, Volume2, VolumeX, RotateCw, Hammer, Repeat, Activity, Undo2 } from 'lucide-react';
+import { RefreshCw, Trophy, Crown, Zap, Volume2, VolumeX, RotateCw, Hammer, Repeat, Activity, Undo2, Pause, Play, Home, Grid3X3 } from 'lucide-react';
 import { GRID_SIZE, SCORING, POWERUP_REWARDS, SHAPES_DATA } from './constants';
-import { GameState, GameAction, Shape, Grid, DifficultyTier, DragState, HistoryState } from './types';
+import { GameState, GameAction, Shape, Grid, DifficultyTier, DragState, HistoryState, FloatingText } from './types';
+
+const SAVE_KEY = 'blockPuzzleSaveState';
 
 // --- LOGIC HELPERS ---
 
@@ -95,7 +97,6 @@ const getPotentialClears = (gridToCheck: Grid) => {
     if (gridToCheck.every(row => row[c] === 1)) cols.push(c);
   }
   
-  // Cleaned up Magic Array: Dynamic Subgrid check
   for (let r = 0; r < GRID_SIZE; r += 3) {
     for (let c = 0; c < GRID_SIZE; c += 3) {
       let full = true;
@@ -123,7 +124,6 @@ const calculateScoreResult = (originalGrid: Grid, r: number, c: number, shapeMat
   const newGrid = originalGrid.map(row => [...row]);
   let blocksPlaced = 0;
 
-  // Place block on temp grid
   shapeMatrix.forEach((row, i) => {
     row.forEach((val, j) => {
       if (val === 1) {
@@ -135,12 +135,10 @@ const calculateScoreResult = (originalGrid: Grid, r: number, c: number, shapeMat
 
   const { count, clearedSet } = getPotentialClears(newGrid);
 
-  // Base score for placement
   let points = blocksPlaced * SCORING.BLOCK_PLACED;
   let comboText: string | null = null;
   let hammerBonus = 0;
 
-  // Calculate clear score
   if (count > 0) {
     const potentialStreak = currentStreak + 1;
     const comboMultiplier = Math.min(
@@ -239,6 +237,53 @@ const playSound = (type: string, soundEnabled: boolean) => {
   }
 };
 
+// --- UI COMPONENTS ---
+
+const ScoreCounter = ({ value }: { value: number }) => {
+  const [displayValue, setDisplayValue] = useState(value);
+  
+  useEffect(() => {
+    if (displayValue === value) return;
+    const diff = value - displayValue;
+    const step = Math.ceil(diff / 10);
+    
+    const timer = setInterval(() => {
+      setDisplayValue(prev => {
+        if (Math.abs(value - prev) <= Math.abs(step)) {
+          clearInterval(timer);
+          return value;
+        }
+        return prev + step;
+      });
+    }, 16);
+    
+    return () => clearInterval(timer);
+  }, [value, displayValue]);
+
+  return <>{displayValue}</>;
+};
+
+const FloatingTextOverlay = ({ effects }: { effects: FloatingText[] }) => {
+  return (
+    <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+      {effects.map(effect => (
+        <div
+          key={effect.id}
+          className="absolute animate-[float-up_1s_ease-out_forwards] font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] whitespace-nowrap"
+          style={{
+            left: `${(effect.c * 100 / GRID_SIZE) + 5}%`,
+            top: `${(effect.r * 100 / GRID_SIZE) + 5}%`,
+            fontSize: 'min(5vw, 24px)',
+            color: effect.text.includes('Combo') ? '#fbbf24' : '#ffffff',
+          }}
+        >
+          {effect.text}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // --- REDUCER ---
 
 const loadHighScore = () => {
@@ -258,6 +303,7 @@ const initialState: GameState = {
   score: 0,
   highScore: loadHighScore(),
   gameOver: false,
+  isPaused: false,
   streak: 0,
   scorePop: false,
   soundEnabled: true,
@@ -270,6 +316,9 @@ const initialState: GameState = {
   previewScore: 0,
   soundEffectToPlay: null,
   history: [],
+  placedCells: [],
+  clearedCells: [],
+  effects: []
 };
 
 const createHistorySnapshot = (state: GameState): HistoryState => ({
@@ -289,6 +338,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         soundEnabled: state.soundEnabled,
         availableShapes: [],
         history: [],
+        effects: []
       };
 
     case 'REFILL_SHAPES':
@@ -329,6 +379,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
     }
     
     case 'ACTIVATE_POWERUP': {
+        if (state.isPaused) return state;
         if (state.powerUps[action.payload] === 0) {
           return {
             ...state,
@@ -353,7 +404,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         if (state.activePowerUp !== 'refresh' || state.powerUps.refresh <= 0) return state;
 
         const snapshot = createHistorySnapshot(state);
-        const newHistory = [snapshot]; // Single level undo
+        const newHistory = [snapshot];
 
         return {
             ...state,
@@ -362,7 +413,8 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
             activePowerUp: null,
             availableShapes: [], 
             soundEffectToPlay: 'drop',
-            comboText: 'FRESH START!'
+            comboText: 'FRESH START!',
+            effects: [...state.effects, { id: Date.now(), r: 4, c: 4, text: "Refresh!" }]
         };
     }
         
@@ -394,10 +446,11 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         }
 
         const snapshot = createHistorySnapshot(state);
-        const newHistory = [snapshot]; // Single level undo
+        const newHistory = [snapshot]; 
         
         const newGrid = state.grid.map(row => [...row]);
-        const cellsCleared = new Set();
+        const cellsCleared = new Set<string>();
+        const clearedCoords: {r: number, c: number}[] = [];
 
         // Clear 3x3 area
         for (let row = r - 1; row <= r + 1; row++) {
@@ -406,6 +459,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
                     if (newGrid[row][col] === 1) {
                          newGrid[row][col] = 0;
                          cellsCleared.add(`${row},${col}`);
+                         clearedCoords.push({r: row, c: col});
                     }
                 }
             }
@@ -424,10 +478,13 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
             scorePop: true,
             comboText: 'HAMMER SMASH! 🔨',
             soundEffectToPlay: 'clear',
+            clearedCells: clearedCoords,
+            effects: [...state.effects, { id: Date.now(), r, c, text: `+${points}` }]
         };
     }
 
     case 'START_DRAG':
+      if (state.isPaused) return state;
       return {
         ...state,
         draggingShape: action.payload, 
@@ -466,7 +523,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
 
       // Save history before modifying state
       const snapshot = createHistorySnapshot(state);
-      const newHistory = [snapshot]; // Single level undo
+      const newHistory = [snapshot];
 
       const { 
         newGrid, 
@@ -477,11 +534,19 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         hammerBonus 
       } = calculateScoreResult(state.grid, r, c, shape.matrix, state.streak);
       
-      // Update grid with cleared cells removed
+      const newlyPlaced: {r: number, c: number}[] = [];
+      shape.matrix.forEach((row, idx) => {
+          row.forEach((val, jdx) => {
+              if (val === 1) newlyPlaced.push({r: r + idx, c: c + jdx});
+          });
+      });
+
+      const newlyCleared: {r: number, c: number}[] = [];
       if (clearedSet.size > 0) {
         clearedSet.forEach(key => {
           const [cr, cc] = key.split(',').map(Number);
           newGrid[cr][cc] = 0;
+          newlyCleared.push({r: cr, c: cc});
         });
       }
 
@@ -492,6 +557,11 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
       }
 
       const newScore = Math.floor(state.score + points);
+      
+      const newEffects = [...state.effects, { id: Date.now(), r, c, text: `+${Math.floor(points)}` }];
+      if (comboText) {
+          newEffects.push({ id: Date.now() + 1, r: Math.max(0, r-1), c, text: comboText });
+      }
 
       return {
         ...state,
@@ -508,11 +578,14 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         scorePop: true,
         comboText: comboText,
         soundEffectToPlay: clearedCount > 0 ? 'clear' : 'drop',
+        placedCells: newlyPlaced,
+        clearedCells: newlyCleared,
+        effects: newEffects
       };
     }
 
     case 'UNDO': {
-      if (state.history.length === 0) return state;
+      if (state.history.length === 0 || state.isPaused) return state;
       const previous = state.history[state.history.length - 1];
       const newHistory = state.history.slice(0, -1);
       
@@ -531,8 +604,24 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         previewClears: new Set(),
         previewScore: 0,
         comboText: null,
+        placedCells: [],
+        clearedCells: [],
+        effects: []
       };
     }
+    
+    case 'REMOVE_EFFECT':
+        return {
+            ...state,
+            effects: state.effects.filter(e => e.id !== action.payload)
+        };
+        
+    case 'CLEAR_ANIMATIONS':
+        return {
+            ...state,
+            placedCells: [],
+            clearedCells: []
+        };
 
     case 'CANCEL_DRAG':
       return {
@@ -559,6 +648,35 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         soundEffectToPlay: 'clear'
       };
 
+    case 'TOGGLE_PAUSE':
+      return { 
+        ...state, 
+        isPaused: !state.isPaused, 
+        draggingShape: null, 
+        ghostPosition: null,
+        activePowerUp: null 
+      };
+
+    case 'RESUME_GAME':
+      return { ...state, isPaused: false };
+
+    case 'LOAD_GAME':
+      return {
+        ...action.payload,
+        isPaused: false,
+        draggingShape: null,
+        ghostPosition: null,
+        activePowerUp: null,
+        scorePop: false,
+        comboText: null,
+        soundEffectToPlay: null,
+        previewClears: new Set(),
+        effects: [],
+        placedCells: [],
+        clearedCells: [],
+        history: action.payload.history || []
+      };
+
     default:
       return state;
   }
@@ -568,6 +686,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
 // --- MAIN COMPONENT ---
 
 const App = () => {
+  const [view, setView] = useState<'home' | 'game'>('home');
   const [state, dispatch] = useReducer(gameReducer, initialState);
   const [confirmReset, setConfirmReset] = useState(false);
   
@@ -587,6 +706,63 @@ const App = () => {
 
   const currentDifficulty = DIFFICULTY_TIERS.slice().reverse().find(tier => state.score >= tier.score) || DIFFICULTY_TIERS[0];
   const prevDifficulty = useRef(currentDifficulty.level);
+
+  const hasSavedGame = () => {
+    try {
+      return !!localStorage.getItem(SAVE_KEY);
+    } catch { return false; }
+  };
+
+  // Auto-save effect
+  useEffect(() => {
+    if (view !== 'game') return;
+
+    const saveState = () => {
+        if (!state.gameOver) {
+            const saveData = {
+              ...state,
+              history: state.history, // Persist history
+              isPaused: false, 
+              draggingShape: null,
+              ghostPosition: null,
+              previewClears: [], // Clear non-serializable Set
+              effects: [],
+              placedCells: [],
+              clearedCells: [],
+              scorePop: false,
+              comboText: null,
+              soundEffectToPlay: null
+            };
+            try {
+              localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+            } catch (e) { console.error("Save failed", e); }
+        } else {
+            localStorage.removeItem(SAVE_KEY);
+        }
+    };
+
+    const timer = setTimeout(saveState, 500); // 500ms debounce
+    return () => clearTimeout(timer);
+  }, [state, view]);
+  
+  // Cleanup effects
+  useEffect(() => {
+      if (state.placedCells.length > 0 || state.clearedCells.length > 0) {
+          const timer = setTimeout(() => {
+              dispatch({ type: 'CLEAR_ANIMATIONS' });
+          }, 500);
+          return () => clearTimeout(timer);
+      }
+  }, [state.placedCells, state.clearedCells]);
+  
+  useEffect(() => {
+      if (state.effects.length > 0) {
+          const timers = state.effects.map(effect => 
+             setTimeout(() => dispatch({ type: 'REMOVE_EFFECT', payload: effect.id }), 1000)
+          );
+          return () => timers.forEach(clearTimeout);
+      }
+  }, [state.effects]);
 
   useEffect(() => {
     if (currentDifficulty.level > prevDifficulty.current && !state.gameOver) {
@@ -647,7 +823,6 @@ const App = () => {
         newShapes = [];
         for (let i = 0; i < 3; i++) {
             const randomShape = shapePool[Math.floor(Math.random() * shapePool.length)];
-            // Fix: Robust UID generation
             newShapes.push({ ...randomShape, uid: Date.now() + Math.random() + i });
         }
         isPlayable = checkPlayability(newShapes, currentGrid);
@@ -656,7 +831,6 @@ const App = () => {
     
     if (!isPlayable) {
         const dot = ALL_SHAPES.find(s => s.id.startsWith('dot'));
-        // Fallback with strong ID
         if (dot && checkPlayability([{ ...dot, uid: Date.now() + Math.random() }], currentGrid)) {
           newShapes = [{ ...dot, uid: Date.now() + Math.random() }];
         } else {
@@ -669,7 +843,7 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (state.gameOver) return;
+    if (state.gameOver || view !== 'game') return;
 
     if (state.availableShapes.length === 0) {
       generateShapes(state.grid, state.score);
@@ -677,7 +851,7 @@ const App = () => {
       const canMove = checkPlayability(state.availableShapes, state.grid);
       if (!canMove) dispatch({ type: 'SET_GAME_OVER' });
     }
-  }, [state.availableShapes, state.gameOver, state.grid, state.score, generateShapes]);
+  }, [state.availableShapes, state.gameOver, state.grid, state.score, generateShapes, view]);
 
   // --- INTERACTION HANDLERS ---
   
@@ -688,7 +862,8 @@ const App = () => {
   };
 
   const handlePointerDown = (e: React.PointerEvent, shape: Shape, index: number) => {
-    // Resume Audio Context on interaction
+    if (state.isPaused) return;
+
     const ctx = getAudioContext();
     if (ctx && ctx.state === 'suspended') {
       ctx.resume();
@@ -701,7 +876,6 @@ const App = () => {
     
     const coords = getClientCoords(e);
     
-    // Smart Offset (Only lift for touch/mobile if detected via pointerType)
     const isTouch = e.pointerType === 'touch';
     const offsetY = isTouch ? -70 : 0;
 
@@ -717,7 +891,7 @@ const App = () => {
   };
   
   const handleGridClick = (e: React.MouseEvent) => {
-    if (!gridRef.current || state.gameOver || state.draggingShape) return;
+    if (!gridRef.current || state.gameOver || state.draggingShape || state.isPaused) return;
 
     if (state.activePowerUp === 'hammer') {
         const rect = gridRef.current.getBoundingClientRect();
@@ -746,9 +920,30 @@ const App = () => {
     if (confirmReset) {
       dispatch({ type: 'RESET_GAME' });
       setConfirmReset(false);
+      dispatch({ type: 'RESUME_GAME' }); // Ensure unpaused
     } else {
       setConfirmReset(true);
     }
+  };
+
+  const handleHomeClick = () => {
+    setView('home');
+  };
+
+  const handleNewGame = () => {
+    dispatch({ type: 'RESET_GAME' });
+    setView('game');
+  };
+
+  const handleContinueGame = () => {
+    try {
+      const saved = localStorage.getItem(SAVE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        dispatch({ type: 'LOAD_GAME', payload: parsed });
+        setView('game');
+      }
+    } catch (e) { console.error('Load failed', e); }
   };
 
   const updateGhostLogic = useCallback((x: number, y: number, shape: Shape) => {
@@ -805,7 +1000,7 @@ const App = () => {
       
       if (dragRef.current.clickThreshold && (moveDist > 15 || (moveDist > 5 && timeSinceStart > 150))) {
         dragRef.current.clickThreshold = false;
-        if (!state.draggingShape && !state.activePowerUp && dragRef.current.shape) {
+        if (!state.draggingShape && !state.activePowerUp && dragRef.current.shape && !state.isPaused) {
            dispatch({ 
              type: 'START_DRAG', 
              payload: { ...dragRef.current.shape, index: dragRef.current.index } 
@@ -830,7 +1025,7 @@ const App = () => {
       dragRef.current.active = false;
 
       // Tap detection (rotation)
-      if (dragRef.current.clickThreshold && !state.activePowerUp) {
+      if (dragRef.current.clickThreshold && !state.activePowerUp && !state.isPaused) {
         if (!state.gameOver) {
             dispatch({ type: 'ROTATE_SHAPE_IN_TRAY', payload: { index: dragRef.current.index } });
         }
@@ -859,7 +1054,7 @@ const App = () => {
       window.removeEventListener('mouseup', handleUp);
       window.removeEventListener('touchend', handleUp);
     };
-  }, [state.draggingShape, state.ghostPosition, state.gameOver, state.activePowerUp, updateGhostLogic]);
+  }, [state.draggingShape, state.ghostPosition, state.gameOver, state.activePowerUp, updateGhostLogic, state.isPaused]);
 
   // --- RENDER HELPERS ---
   const renderCell = (r: number, c: number) => {
@@ -876,16 +1071,21 @@ const App = () => {
       }
     }
 
-    const isAboutToClear = state.previewClears.has(`${r},${c}`);
-    // Fixed: Added default border to prevent layout shift ("glitch") when toggling between empty (0px border) and filled (1px border)
+    const isAboutToClear = state.previewClears?.has(`${r},${c}`);
+    const isJustPlaced = state.placedCells.some(cell => cell.r === r && cell.c === c);
+    const isJustCleared = state.clearedCells.some(cell => cell.r === r && cell.c === c);
+    
     let baseClass = "transition-colors duration-200 rounded-[3px] border "; 
     
-    if (isAboutToClear) {
+    if (isJustCleared) {
+        baseClass += "bg-white animate-clear shadow-[0_0_15px_rgba(255,255,255,0.8)] border-white";
+    } else if (isJustPlaced) {
+        baseClass += "bg-blue-400 animate-pop border-blue-300";
+    } else if (isAboutToClear) {
       baseClass += "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] border-cyan-200";
     } else if (cellValue === 1) {
       baseClass += "bg-blue-500 shadow-md border-blue-400/30";
     } else if (isGhost) {
-      // Enhanced ghost styling with dashed border and pulse
       baseClass += "bg-blue-400/20 border-2 border-dashed border-blue-400/60 animate-pulse";
     } else {
       const isAlt = (Math.floor(r/3) + Math.floor(c/3)) % 2 === 0;
@@ -906,7 +1106,7 @@ const App = () => {
   
   const PowerUpButton = ({ type, Icon, count, compact }: { type: 'hammer' | 'refresh', Icon: any, count: number, compact?: boolean }) => {
       const isActive = state.activePowerUp === type;
-      const isDisabled = count === 0 || state.gameOver;
+      const isDisabled = count === 0 || state.gameOver || state.isPaused;
       
       if (compact) {
         return (
@@ -934,6 +1134,60 @@ const App = () => {
       return null;
   };
 
+  // --- VIEW RENDERING ---
+
+  if (view === 'home') {
+    return (
+      <div className="fixed inset-0 bg-slate-950 text-slate-100 font-sans flex flex-col items-center justify-center p-4">
+        <div className="w-full max-w-md space-y-8 text-center animate-in fade-in zoom-in duration-500">
+          <div className="space-y-2">
+            <div className="flex justify-center mb-6">
+              <Grid3X3 className="w-20 h-20 text-blue-500 drop-shadow-[0_0_15px_rgba(59,130,246,0.5)]" />
+            </div>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+              BLOCK SUDOKU
+            </h1>
+            <p className="text-slate-400 text-lg">Master the grid.</p>
+          </div>
+
+          <div className="flex flex-col gap-4 max-w-xs mx-auto w-full pt-8">
+            {hasSavedGame() && (
+              <button
+                onClick={handleContinueGame}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-lg shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                <Play className="w-6 h-6 fill-current" />
+                Continue Game
+              </button>
+            )}
+            
+            <button
+              onClick={handleNewGame}
+              className={`w-full py-4 rounded-xl font-bold text-lg border-2 border-slate-700 hover:border-slate-600 hover:bg-slate-800 active:scale-95 transition-all flex items-center justify-center gap-3 ${!hasSavedGame() ? 'bg-blue-600 hover:bg-blue-500 border-none text-white shadow-lg shadow-blue-500/20' : 'text-slate-300'}`}
+            >
+              {hasSavedGame() ? 'New Game' : <><Play className="w-6 h-6 fill-current" /> New Game</>}
+            </button>
+          </div>
+
+          <div className="pt-8 flex flex-col items-center">
+            <div className="text-slate-500 text-xs uppercase tracking-widest font-bold mb-2">High Score</div>
+            <div className="text-3xl font-black text-white flex items-center gap-2">
+              <Trophy className="w-6 h-6 text-yellow-500" />
+              {state.highScore}
+            </div>
+          </div>
+          
+          <button 
+             onClick={() => dispatch({ type: 'TOGGLE_SOUND' })}
+             className="absolute bottom-8 right-8 p-3 bg-slate-800/50 rounded-full hover:bg-slate-700 transition-colors text-slate-400"
+          >
+            {state.soundEnabled ? <Volume2 className="w-5 h-5"/> : <VolumeX className="w-5 h-5"/>}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 bg-gradient-to-b from-slate-950 to-slate-900 text-slate-100 font-sans select-none overflow-hidden touch-none flex flex-col items-center">
       
@@ -943,7 +1197,7 @@ const App = () => {
           <div className="flex flex-col">
             <div className="text-slate-500 text-[10px] uppercase tracking-wider font-semibold mb-0.5">Score</div>
             <div className={`text-3xl md:text-4xl font-black text-white leading-none transition-transform duration-100 ${state.scorePop ? 'scale-110 text-blue-400' : 'scale-100'}`}>
-              {state.score}
+              <ScoreCounter value={state.score} />
             </div>
           </div>
           
@@ -986,21 +1240,22 @@ const App = () => {
           <div className="flex items-center gap-2">
             <button 
               onClick={() => handleUndo()}
-              disabled={state.history.length === 0}
-              className={`p-2 rounded-lg transition-colors ${state.history.length === 0 ? 'bg-slate-800/30 text-slate-600 cursor-not-allowed' : 'bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+              disabled={state.history.length === 0 || state.isPaused}
+              className={`p-2 rounded-lg transition-colors ${state.history.length === 0 || state.isPaused ? 'bg-slate-800/30 text-slate-600 cursor-not-allowed' : 'bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
               title="Undo last move"
             >
               <Undo2 className="w-4 h-4" />
             </button>
             <button 
-               onClick={() => dispatch({ type: 'TOGGLE_SOUND' })}
-               className="p-2 bg-slate-800/50 rounded-lg hover:bg-slate-700 transition-colors"
+               onClick={() => dispatch({ type: 'TOGGLE_PAUSE' })}
+               className={`p-2 rounded-lg transition-colors ${state.isPaused ? 'bg-yellow-500 text-slate-900' : 'bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
             >
-              {state.soundEnabled ? <Volume2 className="w-4 h-4 text-slate-400"/> : <VolumeX className="w-4 h-4 text-slate-500"/>}
+              {state.isPaused ? <Play className="w-4 h-4 fill-current"/> : <Pause className="w-4 h-4 fill-current"/>}
             </button>
             <button 
               onClick={handleResetClick}
-              className={`p-2 rounded-lg transition-colors duration-200 ${confirmReset ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600/90 hover:bg-blue-500 active:bg-blue-700'}`}
+              disabled={state.isPaused}
+              className={`p-2 rounded-lg transition-colors duration-200 ${state.isPaused ? 'bg-slate-800/30 opacity-50' : (confirmReset ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600/90 hover:bg-blue-500 active:bg-blue-700')}`}
               title={confirmReset ? "Click again to confirm" : "Restart Game"}
             >
               <RefreshCw className={`w-4 h-4 text-white ${confirmReset ? 'animate-spin' : ''}`} />
@@ -1010,12 +1265,12 @@ const App = () => {
       </div>
 
       {/* Grid Container */}
-      <div className="flex-1 flex flex-col items-center justify-center w-full max-w-[min(90vw,500px)] px-4 py-4">
+      <div className="flex-1 flex flex-col items-center justify-center w-full max-w-[min(90vw,500px)] px-4 py-4 relative">
         <div 
           ref={gridRef}
           onClick={handleGridClick}
           className={`relative bg-slate-900 p-2 rounded-2xl shadow-2xl border-2 transition-all ${
-            state.activePowerUp === 'hammer' 
+            state.activePowerUp === 'hammer' && !state.isPaused
               ? 'border-yellow-400 ring-4 ring-yellow-400/30 cursor-crosshair' 
               : 'border-slate-800'
           }`}
@@ -1030,6 +1285,35 @@ const App = () => {
         >
           {state.grid.map((row, r) => row.map((_, c) => renderCell(r, c)))}
           
+          <FloatingTextOverlay effects={state.effects} />
+
+          {/* Pause Overlay */}
+          {state.isPaused && (
+             <div className="absolute inset-0 z-40 bg-slate-950/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center animate-in fade-in duration-200">
+               <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-2xl flex flex-col gap-3 w-48">
+                 <div className="text-center font-bold text-white text-xl mb-2">Paused</div>
+                 <button 
+                    onClick={() => dispatch({ type: 'RESUME_GAME' })}
+                    className="flex items-center justify-center gap-2 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-colors"
+                 >
+                   <Play className="w-4 h-4 fill-current" /> Resume
+                 </button>
+                 <button 
+                    onClick={handleResetClick}
+                    className="flex items-center justify-center gap-2 w-full py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-colors"
+                 >
+                   <RefreshCw className="w-4 h-4" /> Restart
+                 </button>
+                 <button 
+                    onClick={handleHomeClick}
+                    className="flex items-center justify-center gap-2 w-full py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-medium transition-colors"
+                 >
+                   <Home className="w-4 h-4" /> Home
+                 </button>
+               </div>
+             </div>
+          )}
+
           {state.comboText && (
              <div 
                 key={state.comboText + Date.now()}
@@ -1048,7 +1332,7 @@ const App = () => {
              </div>
           )}
 
-          {state.ghostPosition && state.previewScore > 0 && state.activePowerUp !== 'hammer' && (
+          {state.ghostPosition && state.previewScore > 0 && state.activePowerUp !== 'hammer' && !state.isPaused && (
             <div 
                 className="absolute z-20 pointer-events-none animate-in zoom-in fade-in duration-150"
                 style={{
@@ -1076,9 +1360,15 @@ const App = () => {
                 )}
                 <button 
                   onClick={() => dispatch({ type: 'RESET_GAME' })}
-                  className="w-full px-8 py-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-bold text-lg shadow-xl hover:shadow-blue-500/50 active:scale-95 transition-all"
+                  className="w-full px-8 py-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-bold text-lg shadow-xl hover:shadow-blue-500/50 active:scale-95 transition-all mb-3"
                 >
                   Play Again
+                </button>
+                <button 
+                  onClick={handleHomeClick}
+                  className="w-full px-8 py-3 bg-slate-700 text-white rounded-xl font-bold text-lg hover:bg-slate-600 transition-all"
+                >
+                  Main Menu
                 </button>
              </div>
           </div>
@@ -1086,7 +1376,7 @@ const App = () => {
       </div>
 
       {/* Shapes Tray */}
-      <div className="w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center">
+      <div className={`w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center transition-opacity duration-300 ${state.isPaused ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
         <div className="flex items-center justify-center gap-3 md:gap-4 w-full">
           {state.availableShapes.map((shape, idx) => {
             const isDragging = state.draggingShape && state.draggingShape.uid === shape.uid;
