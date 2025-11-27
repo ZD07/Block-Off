@@ -353,7 +353,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         if (state.activePowerUp !== 'refresh' || state.powerUps.refresh <= 0) return state;
 
         const snapshot = createHistorySnapshot(state);
-        const newHistory = [...state.history, snapshot].slice(-20);
+        const newHistory = [snapshot]; // Single level undo
 
         return {
             ...state,
@@ -394,7 +394,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         }
 
         const snapshot = createHistorySnapshot(state);
-        const newHistory = [...state.history, snapshot].slice(-20);
+        const newHistory = [snapshot]; // Single level undo
         
         const newGrid = state.grid.map(row => [...row]);
         const cellsCleared = new Set();
@@ -466,7 +466,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
 
       // Save history before modifying state
       const snapshot = createHistorySnapshot(state);
-      const newHistory = [...state.history, snapshot].slice(-20);
+      const newHistory = [snapshot]; // Single level undo
 
       const { 
         newGrid, 
@@ -524,13 +524,13 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
         streak: previous.streak,
         powerUps: previous.powerUps,
         history: newHistory,
-        gameOver: false, // Ensure game over is cleared on undo
-        activePowerUp: null, // Reset active powerup selection
-        draggingShape: null, // Reset dragging
+        gameOver: false,
+        activePowerUp: null,
+        draggingShape: null,
         ghostPosition: null,
         previewClears: new Set(),
         previewScore: 0,
-        comboText: null, // Clear combo text
+        comboText: null,
       };
     }
 
@@ -569,6 +569,7 @@ const gameReducer = (state: GameState, action: GameAction): GameState => {
 
 const App = () => {
   const [state, dispatch] = useReducer(gameReducer, initialState);
+  const [confirmReset, setConfirmReset] = useState(false);
   
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState>({ 
@@ -598,6 +599,14 @@ const App = () => {
       prevDifficulty.current = currentDifficulty.level;
     }
   }, [currentDifficulty.level, state.gameOver, currentDifficulty.name]);
+
+  // Restart confirmation timeout
+  useEffect(() => {
+    if (confirmReset) {
+      const timer = setTimeout(() => setConfirmReset(false), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [confirmReset]);
 
   // --- EFFECT HANDLERS ---
   
@@ -692,7 +701,7 @@ const App = () => {
     
     const coords = getClientCoords(e);
     
-    // Smart Offset (Only lift for touch/mobile if detected via pointerType, simplified here)
+    // Smart Offset (Only lift for touch/mobile if detected via pointerType)
     const isTouch = e.pointerType === 'touch';
     const offsetY = isTouch ? -70 : 0;
 
@@ -731,6 +740,15 @@ const App = () => {
     if (now - lastUndoRef.current < 300) return; // 300ms debounce
     lastUndoRef.current = now;
     dispatch({ type: 'UNDO' });
+  };
+
+  const handleResetClick = () => {
+    if (confirmReset) {
+      dispatch({ type: 'RESET_GAME' });
+      setConfirmReset(false);
+    } else {
+      setConfirmReset(true);
+    }
   };
 
   const updateGhostLogic = useCallback((x: number, y: number, shape: Shape) => {
@@ -859,17 +877,19 @@ const App = () => {
     }
 
     const isAboutToClear = state.previewClears.has(`${r},${c}`);
-    let baseClass = "transition-colors duration-200 rounded-[3px] "; 
+    // Fixed: Added default border to prevent layout shift ("glitch") when toggling between empty (0px border) and filled (1px border)
+    let baseClass = "transition-colors duration-200 rounded-[3px] border "; 
     
     if (isAboutToClear) {
-      baseClass += "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] border-2 border-cyan-200";
+      baseClass += "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] border-cyan-200";
     } else if (cellValue === 1) {
-      baseClass += "bg-blue-500 shadow-md border border-blue-400/30";
+      baseClass += "bg-blue-500 shadow-md border-blue-400/30";
     } else if (isGhost) {
-      baseClass += "bg-blue-400/40 border border-blue-300/50";
+      // Enhanced ghost styling with dashed border and pulse
+      baseClass += "bg-blue-400/20 border-2 border-dashed border-blue-400/60 animate-pulse";
     } else {
       const isAlt = (Math.floor(r/3) + Math.floor(c/3)) % 2 === 0;
-      baseClass += isAlt ? "bg-slate-800" : "bg-slate-800/80";
+      baseClass += (isAlt ? "bg-slate-800" : "bg-slate-800/80") + " border-transparent";
     }
 
     return (
@@ -979,10 +999,11 @@ const App = () => {
               {state.soundEnabled ? <Volume2 className="w-4 h-4 text-slate-400"/> : <VolumeX className="w-4 h-4 text-slate-500"/>}
             </button>
             <button 
-              onClick={() => dispatch({ type: 'RESET_GAME' })}
-              className="p-2 bg-blue-600/90 rounded-lg hover:bg-blue-500 active:bg-blue-700 transition-colors"
+              onClick={handleResetClick}
+              className={`p-2 rounded-lg transition-colors duration-200 ${confirmReset ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600/90 hover:bg-blue-500 active:bg-blue-700'}`}
+              title={confirmReset ? "Click again to confirm" : "Restart Game"}
             >
-              <RefreshCw className="w-4 h-4 text-white" />
+              <RefreshCw className={`w-4 h-4 text-white ${confirmReset ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -1065,8 +1086,8 @@ const App = () => {
       </div>
 
       {/* Shapes Tray */}
-      <div className="w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10">
-        <div className="flex items-center justify-center gap-3 md:gap-4">
+      <div className="w-full max-w-2xl px-4 pb-6 md:pb-8 pt-4 shrink-0 z-10 min-h-[160px] flex items-center">
+        <div className="flex items-center justify-center gap-3 md:gap-4 w-full">
           {state.availableShapes.map((shape, idx) => {
             const isDragging = state.draggingShape && state.draggingShape.uid === shape.uid;
             return (
@@ -1075,7 +1096,9 @@ const App = () => {
                 className={`
                   flex-1 max-w-[140px] transition-all duration-300 
                   ${isDragging ? 'opacity-0 scale-90' : 'opacity-100 scale-100'}
+                  animate-enter
                 `}
+                style={{ animationDelay: `${idx * 100}ms` }}
                 onPointerDown={(e) => handlePointerDown(e, shape, idx)}
               >
                 <div className="
@@ -1110,7 +1133,7 @@ const App = () => {
         style={{ transform: 'translate(-1000px, -1000px)' }}
       >
         {state.draggingShape && (
-           <div className="opacity-90 scale-[1.5] filter drop-shadow-2xl">
+           <div className="opacity-95 scale-110 -rotate-12 drop-shadow-[0_20px_20px_rgba(0,0,0,0.5)] transition-all duration-200 ease-out">
              <MiniGrid matrix={state.draggingShape.matrix} isDrag />
            </div>
         )}
